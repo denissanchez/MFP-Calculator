@@ -364,7 +364,7 @@
 <body>
   <div class="header">
     <h1>Verificador Tributario Peru</h1>
-    <p>Calculos en centimos para maxima precision | Generador de payload JSON</p>
+    <p>Calculos en unidades enteras para maxima precision | Generador de payload JSON</p>
   </div>
 
   <div class="container">
@@ -378,6 +378,10 @@
           <input type="number" id="igvRate" class="input-igv" value="18" min="0" max="100" step="0.1">
         </div>
         <div class="igv-display" id="igvInfo">Factor: 1.18</div>
+        <div class="field">
+          <label>Decimales</label>
+          <input type="number" id="roundDecimals" class="input-igv" value="2" min="2" max="3" step="1">
+        </div>
       </div>
 
       <details class="datos-section">
@@ -511,6 +515,7 @@
               <th class="amount">ValorVta</th>
               <th class="amount">BaseIGV</th>
               <th class="amount">IGV</th>
+              <th class="amount">TotalConIGV</th>
               <th class="amount">P.Unit</th>
               <th></th>
             </tr>
@@ -558,7 +563,7 @@
       </div>
 
       <div class="desglose">
-        <div class="desglose-title">Desglose de calculo (centimos)</div>
+        <div class="desglose-title">Desglose de calculo (enteros)</div>
         <div class="desglose-row">
           <span class="dl">Op. Gravadas (base)</span>
           <span class="dv" id="dgGravada">S/ 0.00</span>
@@ -596,7 +601,7 @@
   <div class="copy-toast" id="copyToast">JSON copiado al portapapeles</div>
 
   <div class="footer">
-    Todos los calculos internos se realizan en centimos (enteros) para evitar errores de punto flotante.
+    Todos los calculos internos se realizan en unidades enteras para evitar errores de punto flotante.
   </div>
 
   <script>
@@ -606,7 +611,8 @@
      * - Totals are summed in centimos (integers) to avoid floating-point accumulation errors.
      * - Per-item unit values (valorUnitario, montoPrecioUnitario) use decimal math
      *   rounded to 10 decimal places (SUNAT max precision).
-     * - montoValorVenta, montoBaseIgv, igv, totalImpuestos are rounded to 2 decimals.
+     * - montoValorVenta, montoBaseIgv, igv, totalImpuestos are rounded to N decimals (configurable).
+     * - IGV per item and in totals is calculated by DIFFERENCE (total con IGV - base) to match facturador.
      */
 
     const items = [];
@@ -619,20 +625,34 @@
       return Math.round(num * f) / f;
     }
 
-    function toCentimos(soles) {
-      return Math.round(soles * 100);
+    function getDecimals() {
+      return parseInt(document.getElementById('roundDecimals').value) || 2;
     }
 
-    function formatSoles(centimos) {
-      const neg = centimos < 0;
-      const abs = Math.abs(centimos);
-      const s = Math.floor(abs / 100);
-      const c = abs % 100;
-      return `${neg ? '-' : ''}S/ ${s.toLocaleString('es-PE')}.${String(c).padStart(2, '0')}`;
+    function toUnits(soles) {
+      const factor = Math.pow(10, getDecimals());
+      return Math.round(soles * factor);
     }
 
-    function formatCentimos(centimos) {
-      return `${centimos.toLocaleString('es-PE')} centimos`;
+    function fromUnits(units) {
+      const factor = Math.pow(10, getDecimals());
+      return units / factor;
+    }
+
+    function formatSoles(units) {
+      const N = getDecimals();
+      const factor = Math.pow(10, N);
+      const neg = units < 0;
+      const abs = Math.abs(units);
+      const wholePart = Math.floor(abs / factor);
+      const fracPart = abs % factor;
+      return `${neg ? '-' : ''}S/ ${wholePart.toLocaleString('es-PE')}.${String(fracPart).padStart(N, '0')}`;
+    }
+
+    function formatUnits(units) {
+      const N = getDecimals();
+      const label = N === 2 ? 'centimos' : 'milesimos';
+      return `${units.toLocaleString('es-PE')} ${label}`;
     }
 
     function escapeHtml(str) {
@@ -655,7 +675,9 @@
 
     function calcItemValues(precio, cantidad, tipo, conIgv) {
       const rate = getIgvRate();
+      const N = getDecimals();
       let valorUnitario, montoValorVenta, montoBaseIgv, igv, totalImpuestos, montoPrecioUnitario;
+      let montoTotalConIgv;
       let tipoAfeIgv, porcentajeIgv;
       let mtoValorGratuito;
 
@@ -670,9 +692,10 @@
             valorUnitario = precio;
             montoPrecioUnitario = roundTo(precio * (1 + rate / 100), 10);
           }
-          montoValorVenta = roundTo(valorUnitario * cantidad, 2);
+          montoValorVenta = roundTo(valorUnitario * cantidad, N);
+          montoTotalConIgv = roundTo(montoPrecioUnitario * cantidad, N);
           montoBaseIgv = montoValorVenta;
-          igv = roundTo(montoBaseIgv * rate / 100, 2);
+          igv = roundTo(montoTotalConIgv - montoValorVenta, N);
           totalImpuestos = igv;
           break;
 
@@ -681,7 +704,8 @@
           porcentajeIgv = 0;
           valorUnitario = precio;
           montoPrecioUnitario = precio;
-          montoValorVenta = roundTo(valorUnitario * cantidad, 2);
+          montoValorVenta = roundTo(valorUnitario * cantidad, N);
+          montoTotalConIgv = montoValorVenta;
           montoBaseIgv = montoValorVenta;
           igv = 0;
           totalImpuestos = 0;
@@ -694,15 +718,16 @@
           valorUnitario = 0;
           montoPrecioUnitario = 0;
           montoValorVenta = 0;
-          montoBaseIgv = roundTo(precio * cantidad, 2);
-          igv = roundTo(montoBaseIgv * rate / 100, 2);
+          montoTotalConIgv = 0;
+          montoBaseIgv = roundTo(precio * cantidad, N);
+          igv = roundTo(montoBaseIgv * rate / 100, N);
           totalImpuestos = igv;
           break;
       }
 
       return {
         valorUnitario, montoValorVenta, montoBaseIgv, porcentajeIgv,
-        igv, tipoAfeIgv, totalImpuestos, montoPrecioUnitario, mtoValorGratuito,
+        igv, tipoAfeIgv, totalImpuestos, montoPrecioUnitario, montoTotalConIgv, mtoValorGratuito,
       };
     }
 
@@ -758,35 +783,36 @@
       render();
     }
 
-    // ========== TOTALS IN CENTIMOS ==========
+    // ========== TOTALS IN UNITS ==========
 
     function calcTotals() {
-      let gravCent = 0, inafCent = 0, gratCent = 0, igvCent = 0, igvGratCent = 0;
+      let gravUnits = 0, gravTotalUnits = 0, inafUnits = 0, gratUnits = 0, igvGratUnits = 0;
 
       for (const item of items) {
         const c = item.calc;
         switch (item.tipo) {
           case 'gravada':
-            gravCent += toCentimos(c.montoBaseIgv);
-            igvCent += toCentimos(c.igv);
+            gravUnits += toUnits(c.montoValorVenta);
+            gravTotalUnits += toUnits(c.montoTotalConIgv);
             break;
           case 'inafecta':
-            inafCent += toCentimos(c.montoValorVenta);
+            inafUnits += toUnits(c.montoValorVenta);
             break;
           case 'bonificada':
-            gratCent += toCentimos(c.montoBaseIgv);
-            igvGratCent += toCentimos(c.igv);
+            gratUnits += toUnits(c.montoBaseIgv);
+            igvGratUnits += toUnits(c.igv);
             break;
         }
       }
 
-      const valorVentaCent = gravCent + inafCent;
-      const totalImpCent = igvCent;
-      const subTotalCent = valorVentaCent + totalImpCent;
+      const igvUnits = gravTotalUnits - gravUnits;
+      const totalImpUnits = igvUnits;
+      const valorVentaUnits = gravUnits + inafUnits;
+      const montoImporteVentaUnits = gravTotalUnits + inafUnits;
 
       return {
-        gravCent, inafCent, gratCent, igvCent, igvGratCent,
-        valorVentaCent, totalImpCent, subTotalCent,
+        gravUnits, inafUnits, gratUnits, igvUnits, igvGratUnits,
+        valorVentaUnits, totalImpUnits, montoImporteVentaUnits,
       };
     }
 
@@ -814,12 +840,12 @@
             tipo: document.getElementById('ventFormaPago').value,
           },
           moneda: document.getElementById('ventMoneda').value,
-          totalOpGravadas: t.gravCent / 100,
-          mtoIgv: t.igvCent / 100,
-          totalImpuestos: t.totalImpCent / 100,
-          valorVenta: t.valorVentaCent / 100,
-          montoImporteVenta: t.subTotalCent / 100,
-          subTotal: t.subTotalCent / 100,
+          totalOpGravadas: fromUnits(t.gravUnits),
+          mtoIgv: fromUnits(t.igvUnits),
+          totalImpuestos: fromUnits(t.totalImpUnits),
+          valorVenta: fromUnits(t.valorVentaUnits),
+          montoImporteVenta: fromUnits(t.montoImporteVentaUnits),
+          subTotal: fromUnits(t.montoImporteVentaUnits),
         },
         cliente: {
           tipoDoc: document.getElementById('cliTipoDoc').value,
@@ -851,12 +877,12 @@
       };
 
       // Conditionally add optional header fields
-      if (t.inafCent > 0) {
-        payload.venta.totalInafectas = t.inafCent / 100;
+      if (t.inafUnits > 0) {
+        payload.venta.totalInafectas = fromUnits(t.inafUnits);
       }
-      if (t.gratCent > 0) {
-        payload.venta.totalGratuitas = t.gratCent / 100;
-        payload.venta.mtoIgvGratuitas = t.igvGratCent / 100;
+      if (t.gratUnits > 0) {
+        payload.venta.totalGratuitas = fromUnits(t.gratUnits);
+        payload.venta.mtoIgvGratuitas = fromUnits(t.igvGratUnits);
       }
 
       return payload;
@@ -891,6 +917,7 @@
       // Table rows
       const tbody = document.getElementById('itemsBody');
       tbody.innerHTML = '';
+      const N = getDecimals();
       items.forEach((item, idx) => {
         const c = item.calc;
         const tr = document.createElement('tr');
@@ -902,9 +929,10 @@
           <td><span class="badge badge-${item.tipo}">${item.tipo}</span></td>
           <td class="amount">${item.cantidad}</td>
           <td class="amount">${c.valorUnitario.toFixed(6)}</td>
-          <td class="amount">${c.montoValorVenta.toFixed(2)}</td>
-          <td class="amount">${c.montoBaseIgv.toFixed(2)}</td>
-          <td class="amount">${c.igv > 0 ? c.igv.toFixed(2) : '-'}</td>
+          <td class="amount">${c.montoValorVenta.toFixed(N)}</td>
+          <td class="amount">${c.montoBaseIgv.toFixed(N)}</td>
+          <td class="amount">${c.igv > 0 ? c.igv.toFixed(N) : '-'}</td>
+          <td class="amount">${c.montoTotalConIgv > 0 ? c.montoTotalConIgv.toFixed(N) : '-'}</td>
           <td class="amount">${c.montoPrecioUnitario > 0 ? c.montoPrecioUnitario.toFixed(6) : '-'}</td>
           <td><button class="btn btn-danger" data-id="${item.id}">&times;</button></td>
         `;
@@ -918,26 +946,25 @@
       // Summary
       const t = calcTotals();
       const rate = getIgvRate();
-      const totalCent = t.subTotalCent;
 
-      document.getElementById('sumGravada').textContent = formatSoles(t.gravCent);
-      document.getElementById('sumGravadaCent').textContent = formatCentimos(t.gravCent);
-      document.getElementById('sumInafecta').textContent = formatSoles(t.inafCent);
-      document.getElementById('sumInafectaCent').textContent = formatCentimos(t.inafCent);
-      document.getElementById('sumBonificada').textContent = formatSoles(t.gratCent);
-      document.getElementById('sumBonificadaCent').textContent = formatCentimos(t.gratCent);
-      document.getElementById('sumIgv').textContent = formatSoles(t.igvCent);
-      document.getElementById('sumIgvCent').textContent = formatCentimos(t.igvCent);
+      document.getElementById('sumGravada').textContent = formatSoles(t.gravUnits);
+      document.getElementById('sumGravadaCent').textContent = formatUnits(t.gravUnits);
+      document.getElementById('sumInafecta').textContent = formatSoles(t.inafUnits);
+      document.getElementById('sumInafectaCent').textContent = formatUnits(t.inafUnits);
+      document.getElementById('sumBonificada').textContent = formatSoles(t.gratUnits);
+      document.getElementById('sumBonificadaCent').textContent = formatUnits(t.gratUnits);
+      document.getElementById('sumIgv').textContent = formatSoles(t.igvUnits);
+      document.getElementById('sumIgvCent').textContent = formatUnits(t.igvUnits);
 
-      document.getElementById('totalValue').textContent = formatSoles(totalCent);
-      document.getElementById('totalCentimos').textContent = formatCentimos(totalCent);
+      document.getElementById('totalValue').textContent = formatSoles(t.montoImporteVentaUnits);
+      document.getElementById('totalCentimos').textContent = formatUnits(t.montoImporteVentaUnits);
 
-      document.getElementById('dgGravada').textContent = formatSoles(t.gravCent);
-      document.getElementById('dgInafecta').textContent = formatSoles(t.inafCent);
+      document.getElementById('dgGravada').textContent = formatSoles(t.gravUnits);
+      document.getElementById('dgInafecta').textContent = formatSoles(t.inafUnits);
       document.getElementById('dgIgvLabel').textContent = `IGV (${rate}%)`;
-      document.getElementById('dgIgv').textContent = formatSoles(t.igvCent);
-      document.getElementById('dgBonificada').textContent = formatSoles(t.gratCent);
-      document.getElementById('dgTotal').textContent = formatSoles(totalCent);
+      document.getElementById('dgIgv').textContent = formatSoles(t.igvUnits);
+      document.getElementById('dgBonificada').textContent = formatSoles(t.gratUnits);
+      document.getElementById('dgTotal').textContent = formatSoles(t.montoImporteVentaUnits);
 
       // JSON
       if (hasItems) {
@@ -954,6 +981,10 @@
       const rate = getIgvRate();
       const factor = (1 + rate / 100).toFixed(4);
       document.getElementById('igvInfo').textContent = `Factor: ${factor}`;
+      recalculateAll();
+    });
+
+    document.getElementById('roundDecimals').addEventListener('input', () => {
       recalculateAll();
     });
 
